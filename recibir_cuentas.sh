@@ -37,7 +37,7 @@ BEGIN {
   last4 = substr($0, len - 3, 4)
   for (i = 1; i <= 4; i++) {
     digit = substr(last4, i, 1)
-    output = output "&\x27" digits_path "/" digit ".gsm\x27"
+    output = output "&\x27" digits_path "/" digit "\x27"
   }
   marque = count + 259
   output = output "&\x27/var/opt/motion2/server/files/sounds/converted/[" marque "]-175261520" sprintf("%04d", 4711 + (count - 1) * 843) "\x27"
