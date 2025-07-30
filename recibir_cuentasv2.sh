@@ -38,7 +38,7 @@ while IFS= read -r cuenta; do
   
   for ((i=0; i<${#last4}; i++)); do
     digit="${last4:$i:1}"
-    line="$line&'$DIGITS_PATH/$digit.gsm'"
+    line="$line&'$DIGITS_PATH/$digit'"
   done
 
   line="$line&'${MARQUE_AUDIO[$INDEX]}'"
