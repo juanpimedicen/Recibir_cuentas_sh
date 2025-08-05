@@ -26,7 +26,7 @@ MARQUE_PATHS[8]="/var/opt/motion2/server/files/sounds/converted/[267]-1752615210
 MARQUE_PATHS[9]="/var/opt/motion2/server/files/sounds/converted/[268]-1752615211846"
 
 # Extraer cuentas y procesar
-echo "$INPUT_JSON" | jq -r '.data.RESPONSE[0:9][] | .cuenta12' | awk -v audio_base="$AUDIO_BASE" -v digits_path="$DIGITS_PATH" '
+echo "$INPUT_JSON" | jq -r '.data[0:9][] | .cuenta12' | awk -v audio_base="$AUDIO_BASE" -v digits_path="$DIGITS_PATH" '
 BEGIN {
   FS = "\n"
 }
