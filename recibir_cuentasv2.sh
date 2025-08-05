@@ -26,7 +26,7 @@ MARQUE_AUDIO=(
 
 # Parseo de JSON
 JSON_INPUT="$1"
-CUENTAS=$(echo "$JSON_INPUT" | jq -r '.data.RESPONSE[].cuenta12' | tail -n 9)
+CUENTAS=$(echo "$JSON_INPUT" | jq -r '.data[].cuenta12' | tail -n 9)
 
 # Construcción de salida
 OUTPUT=""
