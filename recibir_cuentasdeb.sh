@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script: recibir_cuentastranf.sh
+# Script: recibir_cuentasdeb.sh
 # Propósito: Generar cadena de audios para selección de cuenta origen en transferencia
 
 # Verifica que se haya recibido un argumento
