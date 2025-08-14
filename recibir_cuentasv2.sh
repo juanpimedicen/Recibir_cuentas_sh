@@ -8,7 +8,7 @@ fi
 
 # Rutas base
 DIGITS_PATH="/var/lib/asterisk/sounds/es/digits"
-INTRO_AUDIO="/var/opt/motion2/server/files/sounds/converted/[1060]-1752614432318"
+INTRO_AUDIO="/var/opt/motion2/server/files/sounds/converted/[1064]-1752614435734"
 
 # Map de audios de "marque N"
 declare -A MARQUE_AUDIO
