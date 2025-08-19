@@ -229,45 +229,87 @@ app.post('/ivr/recibir', async (req, res) => {
       }
 
       // ============ ACCIÓN: cuentasdeb ============
+      // Filtra cuentas a SOLO moneda == "BS", pasa filtrado al script y devuelve info filtrado
       case 'cuentasdeb': {
         const { bearer, cedularif, url } = req.body || {};
         if (!bearer || !cedularif || !url) {
-          return res.status(400).json({ code: 400, message: 'Faltan: bearer, cedularif, url', read: '', contador: 0 });
+          return res.status(400).json({ code: 400, message: 'Faltan: bearer, cedularif, url', read: '', contador: 0, info: [] });
         }
-
+      
         let upstreamStatus, upstreamData, upstreamMessage;
         try {
-          const { status, data, message } = await callUpstream({
-            url, headers: { bearer }, payload: { cedularif }
-          });
-          upstreamStatus = status; upstreamData = data; upstreamMessage = message;
+          const { status, data, message } = await (async () => {
+            const resp = await axios.post(url, { cedularif }, {
+              headers: {
+                'Authorization': `Bearer ${bearer}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+              },
+              timeout: 15000
+            });
+            return { status: resp.status, data: resp.data, message: resp.data?.message || resp.data?.msg || `HTTP ${resp.status}` };
+          })();
+      
+          upstreamStatus = status;
+          upstreamData = data;
+          upstreamMessage = message;
         } catch (err) {
           const status = err.response?.status || 500;
           const message = err.response?.data?.message || err.response?.data?.error || err.message || 'Error en conexión al upstream';
-          return res.status(200).json({ code: status, message, read: '', contador: 0 });
+          return res.status(200).json({ code: status, message, read: '', contador: 0, info: [] });
         }
-
-        let contadorBS = 0;
+      
+        // Tomar array de cuentas del payload (soporta data o data.data)
+        const arr = Array.isArray(upstreamData?.data) ? upstreamData.data
+                  : (Array.isArray(upstreamData?.data?.data) ? upstreamData.data.data : []);
+      
+        // Filtrar SOLO cuentas en BS (case-insensitive por si viene en minúsculas)
+        const bsOnly = arr.filter(x => String(x?.moneda || '').toUpperCase() === 'BS');
+        const contadorBS = bsOnly.length;
+      
+        // Construir el objeto "info" conservando estructura original, pero con data filtrada
+        const infoFiltrado = { ...upstreamData, data: bsOnly };
+      
+        // Ejecutar el script con SOLO cuentas BS (consistente con lo que se mostrará al usuario)
+        const payloadForScript = infoFiltrado;
+        let jsonArg;
         try {
-          const arr = Array.isArray(upstreamData?.data) ? upstreamData.data : upstreamData?.data?.data || [];
-          if (Array.isArray(arr)) {
-            contadorBS = arr.filter(x => String(x?.moneda || '').toUpperCase() === 'BS').length;
-          }
-        } catch { contadorBS = 0; }
-
-        const { out, error } = await runScript('/usr/src/scripts/ivr/recibir_cuentasdeb.sh', upstreamData);
-        if (error) {
-          return res.status(200).json({ code: upstreamStatus, message: `${upstreamMessage} (${error})`, read: '', contador: contadorBS });
+          jsonArg = JSON.stringify(payloadForScript);
+        } catch (e) {
+          return res.status(200).json({
+            code: upstreamStatus,
+            message: `${upstreamMessage} (No se pudo serializar JSON para el script)`,
+            read: '',
+            contador: contadorBS,
+            info: infoFiltrado
+          });
         }
-
-        return res.status(200).json({
-          code: upstreamStatus,
-          message: upstreamMessage,
-          read: out,
-          contador: contadorBS,
-          info: upstreamData   // ← NUEVO: info en éxito
+      
+        const scriptPath = '/usr/src/scripts/ivr/recibir_cuentasdeb.sh';
+        return execFile('/bin/bash', [scriptPath, jsonArg], { timeout: 20000 }, (error, stdout, stderr) => {
+          if (error) {
+            console.error(`[cuentasdeb] Script error:`, error.message);
+            if (stderr) console.error(`[cuentasdeb] stderr:`, stderr);
+            return res.status(200).json({
+              code: upstreamStatus,
+              message: `${upstreamMessage} (Script error: ${error.message})`,
+              read: '',
+              contador: contadorBS,
+              info: infoFiltrado
+            });
+          }
+      
+          const readString = (stdout || '').toString().trim();
+          return res.status(200).json({
+            code: upstreamStatus,
+            message: upstreamMessage,
+            read: readString,
+            contador: contadorBS,
+            info: infoFiltrado
+          });
         });
       }
+
 
       default:
         return res.status(400).json({ code: 400, message: `Acción no soportada: ${accion}`, read: '', contador: 0 });
