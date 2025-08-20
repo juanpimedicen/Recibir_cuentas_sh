@@ -108,7 +108,7 @@ app.post('/ivr/recibir', async (req, res) => {
   try {
     switch (accion) {
 
-      // ============ ACCIÓN: cuentas (v1) ============
+      // ============ ACCIÓN: cuentas (v1)  (con info)============
       case 'cuentas': {
         const { bearer, cedularif, url } = req.body || {};
         if (!bearer || !cedularif || !url) {
@@ -305,6 +305,119 @@ app.post('/ivr/recibir', async (req, res) => {
             message: upstreamMessage,
             read: readString,
             contador: contadorBS,
+            info: infoFiltrado
+          });
+        });
+      }
+      // ============ ACCIÓN: cuentasacred ============
+      // Usando cuenta20 de la cuenta ORIGEN (de débito) para excluirla y listar destino (BS)
+      case 'cuentasacred': {
+        const { bearer, cedularif, url, cuenta20 } = req.body || {};
+        if (!bearer || !cedularif || !url || !cuenta20) {
+          return res.status(400).json({
+            code: 400,
+            message: 'Faltan: bearer, cedularif, url, cuenta20',
+            read: '',
+            contador: 0,
+            info: []
+          });
+        }
+
+        // 1) Llamado al upstream
+        let upstreamStatus, upstreamData, upstreamMessage;
+        try {
+          const resp = await axios.post(
+            url,
+            { cedularif },
+            {
+              headers: {
+                'Authorization': `Bearer ${bearer}`,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+              },
+              timeout: 15000
+            }
+          );
+          upstreamStatus = resp.status;
+          upstreamData  = resp.data;
+          upstreamMessage = resp.data?.message || resp.data?.msg || `HTTP ${resp.status}`;
+        } catch (err) {
+          const status  = err.response?.status || 500;
+          const message = err.response?.data?.message || err.response?.data?.error || err.message || 'Error en conexión al upstream';
+          return res.status(200).json({
+            code: status,
+            message,
+            read: '',
+            contador: 0,
+            info: []
+          });
+        }
+
+        // 2) Buscar la cuenta origen por cuenta20 y obtener su cuenta12
+        const arr = Array.isArray(upstreamData?.data)
+          ? upstreamData.data
+          : (Array.isArray(upstreamData?.data?.data) ? upstreamData.data.data : []);
+
+        let origen12 = null;
+        try {
+          const origenObj = arr.find(x => String(x?.cuenta20 || '') === String(cuenta20));
+          origen12 = origenObj?.cuenta12 || null;
+        } catch (_) { /* noop */ }
+
+        if (!origen12) {
+          return res.status(200).json({
+            code: 404,
+            message: `No se encontró la cuenta origen con cuenta20=${cuenta20}`,
+            read: '',
+            contador: 0,
+            info: []
+          });
+        }
+
+        // 3) Filtrar info (para responder en 'info' y 'contador'): solo BS y distintas de la origen
+        const bsSinOrigen = arr.filter(x =>
+          String(x?.moneda || '').toUpperCase() === 'BS' &&
+          String(x?.cuenta12 || '') !== String(origen12)
+        );
+        const infoFiltrado = { ...upstreamData, data: bsSinOrigen };
+        const contador = bsSinOrigen.length;
+
+        // 4) Llamar al script con 2 argumentos:
+        //    - ARG1: JSON CRUDO COMPLETO del upstream (el script hará su filtrado interno BS y != origen)
+        //    - ARG2: cuenta12 de la cuenta origen
+        let jsonArg;
+        try {
+          jsonArg = JSON.stringify(upstreamData);
+        } catch (e) {
+          return res.status(200).json({
+            code: upstreamStatus,
+            message: `${upstreamMessage} (No se pudo serializar JSON para el script)`,
+            read: '',
+            contador,
+            info: infoFiltrado
+          });
+        }
+
+        const scriptPath = '/usr/src/scripts/ivr/recibir_cuentasacred.sh';
+        return execFile('/bin/bash', [scriptPath, jsonArg, String(origen12)], { timeout: 20000 }, (error, stdout, stderr) => {
+          if (error) {
+            console.error(`[cuentasacred] Script error:`, error.message);
+            if (stderr) console.error(`[cuentasacred] stderr:`, stderr);
+            return res.status(200).json({
+              code: upstreamStatus,
+              message: `${upstreamMessage} (Script error: ${error.message})`,
+              read: '',
+              contador,
+              info: infoFiltrado
+            });
+          }
+
+          const readString = (stdout || '').toString().trim();
+          return res.status(200).json({
+            code: upstreamStatus,
+            message: upstreamMessage,
+            read: readString,
+            contador,
             info: infoFiltrado
           });
         });
