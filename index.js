@@ -309,6 +309,7 @@ app.post('/ivr/recibir', async (req, res) => {
           });
         });
       }
+
       // ============ ACCIÓN: cuentasacred ============
       // Usando cuenta20 de la cuenta ORIGEN (de débito) para excluirla y listar destino (BS)
       case 'cuentasacred': {
@@ -422,7 +423,6 @@ app.post('/ivr/recibir', async (req, res) => {
           });
         });
       }
-
 
       default:
         return res.status(400).json({ code: 400, message: `Acción no soportada: ${accion}`, read: '', contador: 0 });
@@ -884,6 +884,224 @@ app.post('/ivr/recibir-tarjetas', async (req, res) => {
   });
 });
 
+// ⬇️ Consultar movimientos TDC: code, message, read, contador, info
+app.post('/ivr/consultamovtdc', async (req, res) => {
+  const { bearer, mes, anho, cuenta, tipoMovimiento, url } = req.body || {};
+  if (!bearer || !mes || !anho || !cuenta || typeof tipoMovimiento === 'undefined' || !url) {
+    return res.status(400).json({
+      code: 400,
+      message: 'Parámetros requeridos: bearer, mes, anho, cuenta, tipoMovimiento, url',
+      read: '',
+      contador: 0,
+      info: {}
+    });
+  }
+
+  // === helpers locales ===
+  const CONVERTED = "/var/opt/motion2/server/files/sounds/converted";
+  const DIGITS = "/var/lib/asterisk/sounds/es/digits";
+
+  const A_699  = `${CONVERTED}/[699]-1752615224067`;   // Los movimientos de su cuenta son
+  const A_1065 = `${CONVERTED}/[1065]-1752614436461`;   // Crédito por
+  const A_1066 = `${CONVERTED}/[1066]-1752614437314`;   // Débito por
+  const A_1026 = `${CONVERTED}/[1026]-1752614402030`;   // Bolívares y
+  const A_2056 = `${CONVERTED}/[2056]-1754409695005`;   // céntimos
+  const A_1067 = `${CONVERTED}/[1067]-1752614438152`;   // con fecha
+  const A_1080 = `${CONVERTED}/[1080]-1752614449692`;   // primero
+  const A_1050 = `${CONVERTED}/[1050]-1752614422776`;   // Si desea repetir...
+  const A_1029 = `${CONVERTED}/[1029]-1752614405010`;   // Para regresar...
+  const A_1030 = `${CONVERTED}/[1030]-1752614405921`;   // Para salir...
+
+  const MESES = {
+    1: `${CONVERTED}/[1068]-1752614439001`,  // enero
+    2: `${CONVERTED}/[1069]-1752614439848`,
+    3: `${CONVERTED}/[1070]-1752614440702`,
+    4: `${CONVERTED}/[1071]-1752614441551`,
+    5: `${CONVERTED}/[1072]-1752614442382`,
+    6: `${CONVERTED}/[1073]-1752614443285`,
+    7: `${CONVERTED}/[1074]-1752614444152`,
+    8: `${CONVERTED}/[1075]-1752614445113`,
+    9: `${CONVERTED}/[1076]-1752614446110`,
+    10: `${CONVERTED}/[1077]-1752614446975`,
+    11: `${CONVERTED}/[1078]-1752614447930`,
+    12: `${CONVERTED}/[1079]-1752614448871`
+  };
+
+  // SayNumber aproximado con /digits:
+  const sayNumber = (n) => {
+    // normaliza a entero
+    n = String(n).trim();
+    if (n === '') n = '0';
+    n = Number(n);
+    if (!Number.isFinite(n)) n = 0;
+    n = Math.trunc(n);
+
+    if (n === 0) return `'${DIGITS}/0'`;
+    if (n <= 29 || (n < 100 && n % 10 === 0) || (n <= 900 && n % 100 === 0)) {
+      return `'${DIGITS}/${n}'`;
+    }
+    if (n >= 100) {
+      const c = Math.trunc(n / 100) * 100;
+      const r = n % 100;
+      let out = `'${DIGITS}/${c}'`;
+      if (r > 0) {
+        if (r <= 29 || (r < 100 && r % 10 === 0)) {
+          out += `&'${DIGITS}/${r}'`;
+        } else {
+          const d = Math.trunc(r / 10) * 10;
+          const u = r % 10;
+          out += `&'${DIGITS}/${d}'`;
+          if (u) out += `&'${DIGITS}/${u}'`;
+        }
+      }
+      return out;
+    }
+    // 30..99 no múltiplos de 10
+    const d = Math.trunc(n / 10) * 10;
+    const u = n % 10;
+    let out = `'${DIGITS}/${d}'`;
+    if (u) out += `&'${DIGITS}/${u}'`;
+    return out;
+  };
+
+  const splitAmount = (val) => {
+    // devuelve {entero, cent} (cent en 2 dígitos)
+    const fmt = Number(val).toFixed(2);
+    const [entero, cent] = fmt.split('.');
+    return { entero, cent };
+  };
+
+  const tipoEsCredito = (tipo) => {
+    // PG = pago recibido (crédito); RT = retiro (débito); CN = compra (débito)
+    const t = String(tipo || '').toUpperCase();
+    return t === 'PG';
+  };
+
+  const buildReadFromMovs = (movs) => {
+    if (!Array.isArray(movs) || movs.length === 0) return '';
+    const top = movs.slice(0, 10);
+    let parts = [`'${A_699}'`];
+
+    for (const m of top) {
+      const esCredito = tipoEsCredito(m.tipo);
+      const head = esCredito ? `'${A_1065}'` : `'${A_1066}'`;
+
+      // monto
+      const { entero, cent } = splitAmount(m.monto || 0);
+
+      // fecha: día y mes
+      // algunos back envían dia/mes como string; garantizamos entero
+      const diaNum = parseInt(m.dia || '0', 10);
+      const mesNum = parseInt(m.mes || '0', 10);
+
+      // día: 01 => 'primero', otros => sayNumber(día)
+      const diaAudio = (diaNum === 1) ? `'${A_1080}'` : sayNumber(isNaN(diaNum) ? 0 : diaNum);
+      const mesAudio = MESES[mesNum] ? `'${MESES[mesNum]}'` : `'${MESES[1]}'`; // fallback enero
+
+      // Construcción:
+      // [1065|1066] & monto entero & [1026] & cent & [2056] & [1067] & (dia) & (mes)
+      let bloque = [
+        head,
+        sayNumber(entero),
+        `'${A_1026}'`,
+        sayNumber(cent),
+        `'${A_2056}'`,
+        `'${A_1067}'`,
+        diaAudio,
+        mesAudio
+      ].join('&');
+
+      parts.push(bloque);
+    }
+
+    // Final fijo:
+    parts.push(`'${A_1050}'&'${A_1029}'&'${A_1030}'`);
+    return parts.join('&');
+  };
+
+  // Llamada al upstream
+  const callUpstream = async (payload) => {
+    const resp = await axios.post(url, payload, {
+      headers: {
+        'Authorization': `Bearer ${bearer}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      timeout: 15000
+    });
+    return {
+      status: resp.status,
+      data: resp.data,
+      message: resp.data?.message || resp.data?.msg || `HTTP ${resp.status}`
+    };
+  };
+
+  // primer intento
+  let first;
+  try {
+    first = await callUpstream({ mes, anho, cuenta, tipoMovimiento });
+  } catch (err) {
+    const status = err.response?.status || 500;
+    const message = err.response?.data?.message || err.response?.data?.error || err.message || 'Error en conexión al upstream';
+    return res.status(200).json({ code: status, message, read: '', contador: 0, info: err.response?.data || {} });
+  }
+
+  const movs1 = first.data?.data?.movimientos || [];
+  if (Array.isArray(movs1) && movs1.length > 0) {
+    const read = buildReadFromMovs(movs1);
+    return res.status(200).json({
+      code: first.status,
+      message: first.message,
+      read,
+      contador: movs1.length,
+      info: first.data
+    });
+  }
+
+  // segundo intento: mes anterior (con rollover de año)
+  const m = parseInt(mes, 10);
+  const y = parseInt(anho, 10);
+  let prevMes = isNaN(m) ? 1 : m;
+  let prevAnho = isNaN(y) ? new Date().getFullYear() : y;
+
+  prevMes = prevMes - 1;
+  if (prevMes <= 0) {
+    prevMes = 12;
+    prevAnho = prevAnho - 1;
+  }
+  const prevMesStr = String(prevMes).padStart(2, '0');
+  const prevAnhoStr = String(prevAnho);
+
+  let second;
+  try {
+    second = await callUpstream({ mes: prevMesStr, anho: prevAnhoStr, cuenta, tipoMovimiento });
+  } catch (err) {
+    const status = err.response?.status || 500;
+    const message = err.response?.data?.message || err.response?.data?.error || err.message || 'Error en conexión al upstream';
+    return res.status(200).json({ code: status, message, read: '', contador: 0, info: err.response?.data || {} });
+  }
+
+  const movs2 = second.data?.data?.movimientos || [];
+  if (Array.isArray(movs2) && movs2.length > 0) {
+    const read = buildReadFromMovs(movs2);
+    return res.status(200).json({
+      code: second.status,
+      message: second.message,
+      read,
+      contador: movs2.length,
+      info: second.data
+    });
+  }
+
+  // Sin movimientos en ambos intentos
+  return res.status(200).json({
+    code: second.status,
+    message: second.message,
+    read: '',
+    contador: 0,
+    info: second.data
+  });
+});
 
 app.listen(PORT, () => {
     console.log(`🟢 IVR env disponible en http://localhost:${PORT}/ivr/env`);
