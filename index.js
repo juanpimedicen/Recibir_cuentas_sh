@@ -884,6 +884,124 @@ app.post('/ivr/recibir-tarjetas', async (req, res) => {
   });
 });
 
+app.post('/ivr/recibir-tarjetaspagotdc', async (req, res) => {
+  const { bearer, cliente, url } = req.body || {};
+
+  // Validaciones básicas
+  if (!bearer || !cliente || !url) {
+    return res.status(400).json({
+      code: 400,
+      message: 'Parámetros requeridos: bearer, cliente, url',
+      read: '',
+      contador: 0,
+      info: []
+    });
+  }
+
+  let upstreamStatus = 0;
+  let upstreamData = null;
+  let upstreamMessage = 'OK';
+
+  try {
+    // Llamado al upstream
+    const upstreamResp = await axios.post(
+      url,
+      { cliente },
+      {
+        headers: {
+          'Authorization': `Bearer ${bearer}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        timeout: 15000,
+      }
+    );
+
+    upstreamStatus = upstreamResp.status;
+    upstreamData = upstreamResp.data;
+    upstreamMessage =
+      upstreamResp.data?.message ||
+      upstreamResp.data?.msg ||
+      `HTTP ${upstreamResp.status}`;
+  } catch (err) {
+    upstreamStatus = err.response?.status || 500;
+    upstreamData = err.response?.data || { error: err.message };
+    upstreamMessage =
+      (err.response?.data && (err.response.data.message || err.response.data.error)) ||
+      err.message ||
+      'Error en conexión al upstream';
+
+    // Devolver diagnóstico si falla el upstream
+    return res.status(200).json({
+      code: upstreamStatus,
+      message: upstreamMessage,
+      read: '',
+      contador: 0,
+      info: []
+    });
+  }
+
+  // Extraer y filtrar tarjetas activas (estatusTarjeta === "1")
+  const tarjetas = upstreamData?.data?.tarjetas;
+  const activas = Array.isArray(tarjetas)
+    ? tarjetas.filter(t => t && (t.estatusTarjeta === '1' || t.estatusTarjeta === 1))
+    : [];
+
+  const contador = activas.length;
+
+  // Si no hay tarjetas activas, devolvemos sin llamar al script
+  if (contador === 0) {
+    return res.status(200).json({
+      code: upstreamStatus,
+      message: upstreamMessage,
+      read: '',
+      contador,
+      info: activas
+    });
+  }
+
+  // Ejecutar el script con solo las tarjetas activas
+  const scriptPath = '/usr/src/scripts/ivr/recibir_tarjetaspagotdc.sh';
+  const payloadForScript = { data: { tarjetas: activas } };
+
+  let jsonArg;
+  try {
+    jsonArg = JSON.stringify(payloadForScript);
+  } catch (e) {
+    return res.status(200).json({
+      code: upstreamStatus,
+      message: `${upstreamMessage} (No se pudo serializar JSON para el script)`,
+      read: '',
+      contador,
+      info: activas
+    });
+  }
+
+  execFile('/bin/bash', [scriptPath, jsonArg], { timeout: 15000 }, (error, stdout, stderr) => {
+    if (error) {
+      console.error(`[recibir_tarjetas] Script error:`, error.message);
+      if (stderr) console.error(`[recibir_tarjetas] stderr:`, stderr);
+      return res.status(200).json({
+        code: upstreamStatus,
+        message: `${upstreamMessage} (Script error: ${error.message})`,
+        read: '',
+        contador,
+        info: activas
+      });
+    }
+
+    const readString = (stdout || '').toString().trim();
+
+    return res.status(200).json({
+      code: upstreamStatus,
+      message: upstreamMessage,
+      read: readString,
+      contador,
+      info: activas
+    });
+  });
+});
+
 // ⬇️ Consultar movimientos TDC: code, message, read, contador, info
 app.post('/ivr/consultamovtdc', async (req, res) => {
   const { bearer, mes, anho, cuenta, tipoMovimiento, url } = req.body || {};
