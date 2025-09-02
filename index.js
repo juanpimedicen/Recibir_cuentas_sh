@@ -14,8 +14,9 @@ app.post('/ivr/env', (req, res) => {
     const ambiente = req.body?.ambiente;
     const CONFIG_FILE = '/usr/src/scripts/ivr/env.config.json';
 
-    if (!ambiente || !['desa', 'prod'].includes(ambiente)) {
-        return res.status(400).json({ error: 'Debe enviar el campo "ambiente" como "desa" o "prod".' });
+    // Agregar 'calidad' a la lista de ambientes válidos
+    if (!ambiente || !['desa', 'prod', 'calidad'].includes(ambiente)) {
+        return res.status(400).json({ error: 'Debe enviar el campo "ambiente" como "desa", "prod" o "calidad".' });
     }
 
     try {
@@ -127,23 +128,42 @@ app.post('/ivr/recibir', async (req, res) => {
           return res.status(200).json({ code: status, message, read: '', contador: 0 });
         }
 
+        // Filtrar solo cuentas en BS
+        let filteredDataBS = [];
         let contadorBS = 0;
+        
         try {
           const arr = Array.isArray(upstreamData?.data) ? upstreamData.data : upstreamData?.data?.data || [];
-          if (Array.isArray(arr)) contadorBS = arr.filter(x => x?.moneda === 'BS').length;
-        } catch { contadorBS = 0; }
+          filteredDataBS = arr.filter(x => x?.moneda === 'BS');
+          contadorBS = filteredDataBS.length;
+        } catch { 
+          filteredDataBS = [];
+          contadorBS = 0; 
+        }
 
-        const { out, error } = await runScript('/usr/src/scripts/ivr/recibir_cuentas.sh', upstreamData);
+        // Crear copia de upstreamData con datos filtrados para el script
+        const dataForScript = {
+          ...upstreamData,
+          data: filteredDataBS
+        };
+
+        const { out, error } = await runScript('/usr/src/scripts/ivr/recibir_cuentas.sh', dataForScript);
         if (error) {
           return res.status(200).json({ code: upstreamStatus, message: `${upstreamMessage} (${error})`, read: '', contador: contadorBS });
         }
+
+        // Mantener la estructura original en info pero con datos filtrados
+        const filteredInfo = {
+          ...upstreamData,
+          data: filteredDataBS
+        };
 
         return res.status(200).json({
           code: upstreamStatus,
           message: upstreamMessage,
           read: out,
           contador: contadorBS,
-          info: upstreamData   // ← NUEVO: info en éxito
+          info: filteredInfo   // ← Info con solo cuentas BS
         });
       }
 
@@ -190,91 +210,146 @@ app.post('/ivr/recibir', async (req, res) => {
       case 'cuentasmov': {
         const { cuenta12, moneda, limite, paginas, bearer, url } = req.body || {};
         if (!cuenta12 || !moneda || typeof limite === 'undefined' || typeof paginas === 'undefined' || !bearer || !url) {
-          return res.status(400).json({ code: 400, message: 'Faltan: cuenta12, moneda, limite, paginas, bearer, url', read: '', contador: 0 });
+          return res.status(400).json({
+            code: 400,
+            message: 'Faltan: cuenta12, moneda, limite, paginas, bearer, url',
+            read: '',
+            contador: 0
+          });
         }
 
         let upstreamStatus, upstreamData, upstreamMessage;
         try {
           const { status, data, message } = await callUpstream({
-            url, headers: { bearer }, payload: { cuenta12, moneda, limite, paginas }
+            url,
+            headers: { bearer },
+            payload: { cuenta12, moneda, limite, paginas }
           });
-          upstreamStatus = status; upstreamData = data; upstreamMessage = message;
-        } catch (err) {
-          const status = err.response?.status || 500;
-          const message = err.response?.data?.message || err.response?.data?.error || err.message || 'Error en conexión al upstream';
-          return res.status(200).json({ code: status, message: read, read: '', contador: 0 });
-        }
-
-        let contadorReal = 0; let registrosBackend = 0;
-        try { contadorReal = Array.isArray(upstreamData?.data?.movimientos) ? upstreamData.data.movimientos.length : 0; } catch {}
-        try {
-          const r = upstreamData?.data?.registros;
-          registrosBackend = typeof r === 'string' ? parseInt(r, 10) : (Number.isFinite(r) ? r : 0);
-        } catch {}
-
-        const { out, error } = await runScript('/usr/src/scripts/ivr/recibir_cuentasmov.sh', upstreamData);
-        if (error) {
-          return res.status(200).json({ code: upstreamStatus, message: `${upstreamMessage} (${error})`, read: '', contador: contadorReal });
-        }
-
-        const codeFinal = (contadorReal === registrosBackend) ? upstreamStatus : '023';
-
-        return res.status(200).json({
-          code: codeFinal,
-          message: upstreamMessage,
-          read: out,
-          contador: contadorReal,
-          info: upstreamData   // ← NUEVO: info en éxito
-        });
-      }
-
-      // ============ ACCIÓN: cuentasdeb ============
-      // Filtra cuentas a SOLO moneda == "BS", pasa filtrado al script y devuelve info filtrado
-      case 'cuentasdeb': {
-        const { bearer, cedularif, url } = req.body || {};
-        if (!bearer || !cedularif || !url) {
-          return res.status(400).json({ code: 400, message: 'Faltan: bearer, cedularif, url', read: '', contador: 0, info: [] });
-        }
-      
-        let upstreamStatus, upstreamData, upstreamMessage;
-        try {
-          const { status, data, message } = await (async () => {
-            const resp = await axios.post(url, { cedularif }, {
-              headers: {
-                'Authorization': `Bearer ${bearer}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-              },
-              timeout: 15000
-            });
-            return { status: resp.status, data: resp.data, message: resp.data?.message || resp.data?.msg || `HTTP ${resp.status}` };
-          })();
-      
           upstreamStatus = status;
           upstreamData = data;
           upstreamMessage = message;
         } catch (err) {
           const status = err.response?.status || 500;
+          const message =
+            err.response?.data?.message ||
+            err.response?.data?.msg ||
+            err.response?.data?.error ||
+            err.message ||
+            'Error en conexión al upstream';
+
+          return res.status(200).json({
+            code: String(status),
+            message,
+            read: '',
+            contador: 0,
+            info: err.response?.data || {}
+          });
+        }
+
+        // Tomar code y message exactamente como vienen del upstream (con fallback al HTTP status)
+        const upstreamCode = upstreamData?.code != null ? String(upstreamData.code) : String(upstreamStatus);
+        const upstreamMsg =
+          upstreamData?.message ||
+          upstreamData?.msg ||
+          upstreamMessage ||
+          `HTTP ${upstreamStatus}`;
+
+        // Contador real de movimientos (informativo)
+        let contadorReal = 0;
+        try {
+          contadorReal = Array.isArray(upstreamData?.data?.movimientos)
+            ? upstreamData.data.movimientos.length
+            : 0;
+        } catch (_) {
+          contadorReal = 0;
+        }
+
+        // Ejecutar el script con la respuesta CRUDA del upstream
+        const { out, error } = await runScript('/usr/src/scripts/ivr/recibir_cuentasmov.sh', upstreamData);
+        if (error) {
+          return res.status(200).json({
+            code: upstreamCode,
+            message: `${upstreamMsg} (${error})`,
+            read: '',
+            contador: contadorReal,
+            info: upstreamData
+          });
+        }
+
+        return res.status(200).json({
+          code: upstreamCode,     // ← tal cual del upstream
+          message: upstreamMsg,   // ← tal cual del upstream
+          read: out,
+          contador: contadorReal, // ← informativo
+          info: upstreamData
+        });
+      }
+
+
+      // ============ ACCIÓN: cuentasdeb ============
+      case 'cuentasdeb': {
+        const { bearer, cedularif, url } = req.body || {};
+        if (!bearer || !cedularif || !url) {
+          return res.status(400).json({ 
+            code: 400, 
+            message: 'Faltan: bearer, cedularif, url', 
+            read: '', 
+            contador: 0, 
+            info: [] 
+          });
+        }
+
+        let upstreamStatus, upstreamData, upstreamMessage;
+        try {
+          const resp = await axios.post(url, { cedularif }, {
+            headers: {
+              'Authorization': `Bearer ${bearer}`,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            timeout: 15000
+          });
+          upstreamStatus = resp.status;
+          upstreamData = resp.data;
+          upstreamMessage = resp.data?.message || resp.data?.msg || `HTTP ${resp.status}`;
+        } catch (err) {
+          const status = err.response?.status || 500;
           const message = err.response?.data?.message || err.response?.data?.error || err.message || 'Error en conexión al upstream';
           return res.status(200).json({ code: status, message, read: '', contador: 0, info: [] });
         }
-      
+
         // Tomar array de cuentas del payload (soporta data o data.data)
-        const arr = Array.isArray(upstreamData?.data) ? upstreamData.data
-                  : (Array.isArray(upstreamData?.data?.data) ? upstreamData.data.data : []);
-      
-        // Filtrar SOLO cuentas en BS (case-insensitive por si viene en minúsculas)
-        const bsOnly = arr.filter(x => String(x?.moneda || '').toUpperCase() === 'BS');
-        const contadorBS = bsOnly.length;
-      
+        const arr = Array.isArray(upstreamData?.data) 
+          ? upstreamData.data
+          : (Array.isArray(upstreamData?.data?.data) ? upstreamData.data.data : []);
+
+        // Filtrar SOLO cuentas en BS y excluir las de estatus "O" o "T"
+        const bsValidas = (Array.isArray(arr) ? arr : []).filter(x => {
+          const monedaOk = String(x?.moneda || '').toUpperCase() === 'BS';
+          const estatus = String(x?.estatus || '').toUpperCase();
+          const estatusOk = estatus !== 'O' && estatus !== 'T';
+          return monedaOk && estatusOk;
+        });
+
+        const contadorBS = bsValidas.length;
+
         // Construir el objeto "info" conservando estructura original, pero con data filtrada
-        const infoFiltrado = { ...upstreamData, data: bsOnly };
-      
-        // Ejecutar el script con SOLO cuentas BS (consistente con lo que se mostrará al usuario)
-        const payloadForScript = infoFiltrado;
+        let infoFiltrado;
+        if (Array.isArray(upstreamData?.data)) {
+          infoFiltrado = { ...upstreamData, data: bsValidas };
+        } else if (Array.isArray(upstreamData?.data?.data)) {
+          infoFiltrado = { 
+            ...upstreamData, 
+            data: { ...upstreamData.data, data: bsValidas } 
+          };
+        } else {
+          infoFiltrado = { ...upstreamData, data: bsValidas };
+        }
+
+        // Ejecutar el script con SOLO cuentas válidas
         let jsonArg;
         try {
-          jsonArg = JSON.stringify(payloadForScript);
+          jsonArg = JSON.stringify(infoFiltrado);
         } catch (e) {
           return res.status(200).json({
             code: upstreamStatus,
@@ -284,7 +359,7 @@ app.post('/ivr/recibir', async (req, res) => {
             info: infoFiltrado
           });
         }
-      
+
         const scriptPath = '/usr/src/scripts/ivr/recibir_cuentasdeb.sh';
         return execFile('/bin/bash', [scriptPath, jsonArg], { timeout: 20000 }, (error, stdout, stderr) => {
           if (error) {
@@ -298,7 +373,7 @@ app.post('/ivr/recibir', async (req, res) => {
               info: infoFiltrado
             });
           }
-      
+
           const readString = (stdout || '').toString().trim();
           return res.status(200).json({
             code: upstreamStatus,
@@ -652,7 +727,6 @@ app.post('/ivr/recibir-cuentasv2', async (req, res) => {
 app.post('/ivr/recibir-cuentasmov', async (req, res) => {
   const { cuenta12, moneda, limite, paginas, bearer, url } = req.body || {};
 
-  // Validaciones básicas
   if (!cuenta12 || !moneda || typeof limite === 'undefined' || typeof paginas === 'undefined' || !bearer || !url) {
     return res.status(400).json({
       code: 400,
@@ -662,12 +736,11 @@ app.post('/ivr/recibir-cuentasmov', async (req, res) => {
     });
   }
 
-  let upstreamStatus = 0;
   let upstreamData = null;
-  let upstreamMessage = "OK";
+  let upstreamCode = "999";
+  let upstreamMessage = "Error desconocido";
 
   try {
-    // Llamado al upstream (API de movimientos)
     const upstreamResp = await axios.post(
       url,
       { cuenta12, moneda, limite, paginas },
@@ -681,59 +754,60 @@ app.post('/ivr/recibir-cuentasmov', async (req, res) => {
       }
     );
 
-    upstreamStatus = upstreamResp.status;
-    upstreamData = upstreamResp.data; // ← respuesta CRUDA
-    upstreamMessage =
-      upstreamResp.data?.message ||
-      upstreamResp.data?.msg ||
-      `HTTP ${upstreamResp.status}`;
+    upstreamData = upstreamResp.data; // crudo
+    upstreamCode = upstreamData?.code ?? String(upstreamResp.status);
+    upstreamMessage = upstreamData?.message || upstreamData?.msg || `HTTP ${upstreamResp.status}`;
   } catch (err) {
-    upstreamStatus = err.response?.status || 500;
-    upstreamData = err.response?.data || { error: err.message };
-    upstreamMessage =
-      (err.response?.data && (err.response.data.message || err.response.data.error)) ||
+    const dataErr = err.response?.data || { error: err.message };
+    const codeErr = dataErr?.code ?? String(err.response?.status || 500);
+    const msgErr =
+      (dataErr && (dataErr.message || dataErr.error)) ||
       err.message ||
       "Error en conexión al upstream";
 
-    // En caso de fallo upstream, respondemos ya con diagnóstico (no llamamos al script)
     return res.status(200).json({
-      code: upstreamStatus,
-      message: upstreamMessage,
+      code: codeErr,
+      message: msgErr,
       read: "",
       contador: 0
     });
   }
 
-  // Contador real de movimientos en el payload
-  let contadorReal = 0;
-  try {
-    const movimientos = upstreamData?.data?.movimientos;
-    contadorReal = Array.isArray(movimientos) ? movimientos.length : 0;
-  } catch (_) {
-    contadorReal = 0;
-  }
+  // --- Filtro por moneda === 'BS' (case-insensitive) ---
+  const isBS = String(moneda || '').trim().toUpperCase() === 'BS';
+  const filteredData = (() => {
+    // Clon superficial + asegurar estructura
+    const base = typeof upstreamData === 'object' && upstreamData !== null ? { ...upstreamData } : { data: {} };
+    base.data = { ...(upstreamData?.data || {}) };
 
-  // 'registros' reportado por el backend (puede venir como string)
-  let registrosBackend = 0;
-  try {
-    const r = upstreamData?.data?.registros;
-    registrosBackend = typeof r === 'string' ? parseInt(r, 10) : (Number.isFinite(r) ? r : 0);
-  } catch (_) {
-    registrosBackend = 0;
-  }
+    if (!isBS) {
+      // Si no es BS, dejamos la estructura pero vaciamos movimientos
+      base.data.movimientos = [];
+      // opcional: podríamos ajustar registros a 0 si viniera
+      base.data.registros = 0;
+    }
+    return base;
+  })();
 
-  // Ejecutar el script con la RESPUESTA CRUDA
+  // Contador real (sobre el filtrado)
+  let contador = 0;
+  try {
+    const movs = filteredData?.data?.movimientos;
+    contador = Array.isArray(movs) ? movs.length : 0;
+  } catch { contador = 0; }
+
+  // Enviar al script el JSON ya filtrado (para BS) o vacío (si no BS)
   const scriptPath = '/usr/src/scripts/ivr/recibir_cuentasmov.sh';
 
   let jsonArg;
   try {
-    jsonArg = JSON.stringify(upstreamData); // ← crudo
+    jsonArg = JSON.stringify(filteredData);
   } catch (e) {
     return res.status(200).json({
-      code: upstreamStatus,
+      code: upstreamCode,
       message: `${upstreamMessage} (No se pudo serializar JSON para el script)`,
       read: "",
-      contador: contadorReal
+      contador
     });
   }
 
@@ -742,33 +816,28 @@ app.post('/ivr/recibir-cuentasmov', async (req, res) => {
       console.error(`[recibir_cuentasmov] Script error:`, error.message);
       if (stderr) console.error(`[recibir_cuentasmov] stderr:`, stderr);
       return res.status(200).json({
-        code: upstreamStatus,
+        code: upstreamCode,
         message: `${upstreamMessage} (Script error: ${error.message})`,
         read: "",
-        contador: contadorReal
+        contador
       });
     }
 
     const readString = (stdout || '').toString().trim();
 
-    // Si contador real y 'registros' difieren → code = '023'
-    const codeFinal = (contadorReal === registrosBackend) ? upstreamStatus : '023';
-
     return res.status(200).json({
-      code: codeFinal,
+      code: upstreamCode,      // el mismo del upstream
       message: upstreamMessage,
-      read: readString,
-      contador: contadorReal
+      read: readString,        // lo que diga el script con el JSON filtrado
+      contador                 // cantidad tras el filtro por BS
     });
   });
 });
 
 
-
 // ⬇️ Recibir tarjetas: salidas → code, message, read, contador, info
 app.post('/ivr/recibir-tarjetas', async (req, res) => {
   const { bearer, cliente, url } = req.body || {};
-
   // Validaciones básicas
   if (!bearer || !cliente || !url) {
     return res.status(400).json({
@@ -844,6 +913,123 @@ app.post('/ivr/recibir-tarjetas', async (req, res) => {
 
   // Ejecutar el script con solo las tarjetas activas
   const scriptPath = '/usr/src/scripts/ivr/recibir_tarjetas.sh';
+  const payloadForScript = { data: { tarjetas: activas } };
+
+  let jsonArg;
+  try {
+    jsonArg = JSON.stringify(payloadForScript);
+  } catch (e) {
+    return res.status(200).json({
+      code: upstreamStatus,
+      message: `${upstreamMessage} (No se pudo serializar JSON para el script)`,
+      read: '',
+      contador,
+      info: activas
+    });
+  }
+
+  execFile('/bin/bash', [scriptPath, jsonArg], { timeout: 15000 }, (error, stdout, stderr) => {
+    if (error) {
+      console.error(`[recibir_tarjetas] Script error:`, error.message);
+      if (stderr) console.error(`[recibir_tarjetas] stderr:`, stderr);
+      return res.status(200).json({
+        code: upstreamStatus,
+        message: `${upstreamMessage} (Script error: ${error.message})`,
+        read: '',
+        contador,
+        info: activas
+      });
+    }
+
+    const readString = (stdout || '').toString().trim();
+
+    return res.status(200).json({
+      code: upstreamStatus,
+      message: upstreamMessage,
+      read: readString,
+      contador,
+      info: activas
+    });
+  });
+});
+
+app.post('/ivr/recibir-tarjetasmov', async (req, res) => {
+  const { bearer, cliente, url } = req.body || {};
+  // Validaciones básicas
+  if (!bearer || !cliente || !url) {
+    return res.status(400).json({
+      code: 400,
+      message: 'Parámetros requeridos: bearer, cliente, url',
+      read: '',
+      contador: 0,
+      info: []
+    });
+  }
+
+  let upstreamStatus = 0;
+  let upstreamData = null;
+  let upstreamMessage = 'OK';
+
+  try {
+    // Llamado al upstream
+    const upstreamResp = await axios.post(
+      url,
+      { cliente },
+      {
+        headers: {
+          'Authorization': `Bearer ${bearer}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        timeout: 15000,
+      }
+    );
+
+    upstreamStatus = upstreamResp.status;
+    upstreamData = upstreamResp.data;
+    upstreamMessage =
+      upstreamResp.data?.message ||
+      upstreamResp.data?.msg ||
+      `HTTP ${upstreamResp.status}`;
+  } catch (err) {
+    upstreamStatus = err.response?.status || 500;
+    upstreamData = err.response?.data || { error: err.message };
+    upstreamMessage =
+      (err.response?.data && (err.response.data.message || err.response.data.error)) ||
+      err.message ||
+      'Error en conexión al upstream';
+
+    // Devolver diagnóstico si falla el upstream
+    return res.status(200).json({
+      code: upstreamStatus,
+      message: upstreamMessage,
+      read: '',
+      contador: 0,
+      info: []
+    });
+  }
+
+  // Extraer y filtrar tarjetas activas (estatusTarjeta === "1")
+  const tarjetas = upstreamData?.data?.tarjetas;
+  const activas = Array.isArray(tarjetas)
+    ? tarjetas.filter(t => t && (t.estatusTarjeta === '1' || t.estatusTarjeta === 1))
+    : [];
+
+  const contador = activas.length;
+
+  // Si no hay tarjetas activas, devolvemos sin llamar al script
+  if (contador === 0) {
+    return res.status(200).json({
+      code: upstreamStatus,
+      message: upstreamMessage,
+      read: '',
+      contador,
+      info: activas
+    });
+  }
+
+  // Ejecutar el script con solo las tarjetas activas
+  const scriptPath = '/usr/src/scripts/ivr/recibir_tarjetastdc_mov.sh';
   const payloadForScript = { data: { tarjetas: activas } };
 
   let jsonArg;
@@ -1015,116 +1201,134 @@ app.post('/ivr/consultamovtdc', async (req, res) => {
     });
   }
 
-  // === helpers locales ===
-  const CONVERTED = "/var/opt/motion2/server/files/sounds/converted";
-  const DIGITS = "/var/lib/asterisk/sounds/es/digits";
-
-  const A_699  = `${CONVERTED}/[699]-1752615224067`;   // Los movimientos de su cuenta son
-  const A_1065 = `${CONVERTED}/[1065]-1752614436461`;   // Crédito por
-  const A_1066 = `${CONVERTED}/[1066]-1752614437314`;   // Débito por
-  const A_1026 = `${CONVERTED}/[1026]-1752614402030`;   // Bolívares y
-  const A_2056 = `${CONVERTED}/[2056]-1754409695005`;   // céntimos
-  const A_1067 = `${CONVERTED}/[1067]-1752614438152`;   // con fecha
-  const A_1080 = `${CONVERTED}/[1080]-1752614449692`;   // primero
-  const A_1050 = `${CONVERTED}/[1050]-1752614422776`;   // Si desea repetir...
-  const A_1029 = `${CONVERTED}/[1029]-1752614405010`;   // Para regresar...
-  const A_1030 = `${CONVERTED}/[1030]-1752614405921`;   // Para salir...
+  // === audios fijos (sin rutas) ===
+  const A_699  = `[2061]-1756331855004`;  // Los movimientos de su tarjeta son
+  const A_1065 = `[1065]-1752614436461`;  // Crédito por
+  const A_1066 = `[1066]-1752614437314`;  // Débito por
+  const A_1026 = `[1026]-1754406097542`;  // Bolívares y
+  const A_2056 = `[2056]-1754409695005`;  // céntimos
+  const A_1067 = `[1067]-1752614438152`;  // con fecha
+  const A_1080 = `[1080]-1752614449692`;  // primero (día 1)
+  const A_1050 = `[1050]-1752614422776`;  // repetir
+  const A_1029 = `[1029]-1752614405010`;  // menú anterior
+  const A_1030 = `[1030]-1752614405921`;  // salir
 
   const MESES = {
-    1: `${CONVERTED}/[1068]-1752614439001`,  // enero
-    2: `${CONVERTED}/[1069]-1752614439848`,
-    3: `${CONVERTED}/[1070]-1752614440702`,
-    4: `${CONVERTED}/[1071]-1752614441551`,
-    5: `${CONVERTED}/[1072]-1752614442382`,
-    6: `${CONVERTED}/[1073]-1752614443285`,
-    7: `${CONVERTED}/[1074]-1752614444152`,
-    8: `${CONVERTED}/[1075]-1752614445113`,
-    9: `${CONVERTED}/[1076]-1752614446110`,
-    10: `${CONVERTED}/[1077]-1752614446975`,
-    11: `${CONVERTED}/[1078]-1752614447930`,
-    12: `${CONVERTED}/[1079]-1752614448871`
+    1: `[1068]-1752614439001`,  2: `[1069]-1752614439848`,
+    3: `[1070]-1752614440702`,  4: `[1071]-1752614441551`,
+    5: `[1072]-1752614442382`,  6: `[1073]-1752614443285`,
+    7: `[1074]-1752614444152`,  8: `[1075]-1752614445113`,
+    9: `[1076]-1752614446110`, 10: `[1077]-1752614446975`,
+   11: `[1078]-1752614447930`, 12: `[1079]-1752614448871`
   };
 
-  // SayNumber aproximado con /digits:
-  const sayNumber = (n) => {
-    // normaliza a entero
-    n = String(n).trim();
-    if (n === '') n = '0';
-    n = Number(n);
-    if (!Number.isFinite(n)) n = 0;
-    n = Math.trunc(n);
+  // ===== Helpers números =====
 
-    if (n === 0) return `'${DIGITS}/0'`;
-    if (n <= 29 || (n < 100 && n % 10 === 0) || (n <= 900 && n % 100 === 0)) {
-      return `'${DIGITS}/${n}'`;
+  // 0..999 usando audios dedicados: 0-99 (un solo archivo) y centenas
+  const sayNumber999 = (n) => {
+    n = Math.trunc(Number(n) || 0);
+    if (n === 0) return '0';
+
+    if (n < 100) return `${n}`;
+    if (n === 100) return '100';
+
+    if (n > 100 && n < 200) {
+      const r = n - 100;
+      return `ciento&${r}`;
     }
-    if (n >= 100) {
-      const c = Math.trunc(n / 100) * 100;
-      const r = n % 100;
-      let out = `'${DIGITS}/${c}'`;
-      if (r > 0) {
-        if (r <= 29 || (r < 100 && r % 10 === 0)) {
-          out += `&'${DIGITS}/${r}'`;
-        } else {
-          const d = Math.trunc(r / 10) * 10;
-          const u = r % 10;
-          out += `&'${DIGITS}/${d}'`;
-          if (u) out += `&'${DIGITS}/${u}'`;
-        }
-      }
-      return out;
-    }
-    // 30..99 no múltiplos de 10
-    const d = Math.trunc(n / 10) * 10;
-    const u = n % 10;
-    let out = `'${DIGITS}/${d}'`;
-    if (u) out += `&'${DIGITS}/${u}'`;
-    return out;
+
+    const hundreds = Math.trunc(n / 100) * 100;
+    const rest = n % 100;
+    if (rest === 0) return `${hundreds}`;
+    return `${hundreds}&${rest}`;
   };
 
+
+// Grande: agrupa en tríos y agrega thousand/million(s)/billion(s),
+// SIN decir "1" antes de mil/millón/billón (decimos "mil", "million", "billion").
+const sayNumberLarge = (val) => {
+  let n = Math.trunc(Number(val) || 0);
+  if (n === 0) return `'0'`;
+
+  // dividir en grupos de 3 dígitos (unidad, miles, millones, billones...)
+  const groups = [];
+  while (n > 0) {
+    groups.push(n % 1000);
+    n = Math.trunc(n / 1000);
+  }
+
+  const scaleName = (idx, groupVal) => {
+    if (groupVal === 0) return '';
+    switch (idx) {
+      case 1: return `thousand`;                                  // miles
+      case 2: return groupVal === 1 ? `million` : `millions`;    // millón(es)
+      case 3: return groupVal === 1 ? `billion` : `billions`;    // billón(es)
+      default: return '';
+    }
+  };
+
+  const parts = [];
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const gv = groups[i];
+    if (gv === 0) continue;
+
+    const suf = scaleName(i, gv);
+
+    // i === 0 => grupo de unidades (sí se dice el "1")
+    // i >= 1 => grupo de escala; si gv === 1, NO decimos "1", solo el sufijo
+    let chunk = '';
+    if (!(i >= 1 && gv === 1)) {
+      // solo formamos el número del grupo si:
+      // - es el grupo de unidades, o
+      // - es un grupo de escala pero su valor != 1
+      chunk = sayNumber999(gv);
+    }
+
+    // agregar el sufijo de escala si corresponde
+    const piece = suf ? (chunk ? `${chunk}&${suf}` : `${suf}`) : chunk;
+    if (piece) parts.push(piece);
+  }
+
+  return parts.join('&');
+};
+
+
+  // Split de monto y céntimos (2 dígitos)
   const splitAmount = (val) => {
-    // devuelve {entero, cent} (cent en 2 dígitos)
-    const fmt = Number(val).toFixed(2);
+    const num = Number(val);
+    const fmt = Number.isFinite(num) ? num.toFixed(2) : '0.00';
     const [entero, cent] = fmt.split('.');
     return { entero, cent };
   };
 
-  const tipoEsCredito = (tipo) => {
-    // PG = pago recibido (crédito); RT = retiro (débito); CN = compra (débito)
-    const t = String(tipo || '').toUpperCase();
-    return t === 'PG';
-  };
+  const tipoEsCredito = (tipo) => String(tipo || '').toUpperCase() === 'PG'; // PG=crédito
 
   const buildReadFromMovs = (movs) => {
     if (!Array.isArray(movs) || movs.length === 0) return '';
     const top = movs.slice(0, 10);
-    let parts = [`'${A_699}'`];
+    const parts = [`${A_699}`];
 
     for (const m of top) {
-      const esCredito = tipoEsCredito(m.tipo);
-      const head = esCredito ? `'${A_1065}'` : `'${A_1066}'`;
-
-      // monto
+      const head = tipoEsCredito(m.tipo) ? `${A_1065}` : `${A_1066}`;
       const { entero, cent } = splitAmount(m.monto || 0);
 
-      // fecha: día y mes
-      // algunos back envían dia/mes como string; garantizamos entero
+      // fecha del payload TDC (esperado: dia/mes)
       const diaNum = parseInt(m.dia || '0', 10);
       const mesNum = parseInt(m.mes || '0', 10);
+      const diaAudio = (diaNum === 1) ? `${A_1080}` : sayNumber999(isNaN(diaNum) ? 0 : diaNum);
+      const mesAudio = MESES[mesNum] ? `${MESES[mesNum]}` : `${MESES[1]}`;
 
-      // día: 01 => 'primero', otros => sayNumber(día)
-      const diaAudio = (diaNum === 1) ? `'${A_1080}'` : sayNumber(isNaN(diaNum) ? 0 : diaNum);
-      const mesAudio = MESES[mesNum] ? `'${MESES[mesNum]}'` : `'${MESES[1]}'`; // fallback enero
+      // monto entero grande + "Bolívares y" + céntimos (0 => '0')
+      const enteroAudio = sayNumberLarge(entero);
+      const centAudio = (cent === '00') ? `0` : sayNumber999(parseInt(cent, 10));
 
-      // Construcción:
-      // [1065|1066] & monto entero & [1026] & cent & [2056] & [1067] & (dia) & (mes)
-      let bloque = [
+      const bloque = [
         head,
-        sayNumber(entero),
-        `'${A_1026}'`,
-        sayNumber(cent),
-        `'${A_2056}'`,
-        `'${A_1067}'`,
+        enteroAudio,
+        `${A_1026}`,
+        centAudio,
+        `${A_2056}`,
+        `${A_1067}`,
         diaAudio,
         mesAudio
       ].join('&');
@@ -1132,12 +1336,11 @@ app.post('/ivr/consultamovtdc', async (req, res) => {
       parts.push(bloque);
     }
 
-    // Final fijo:
-    parts.push(`'${A_1050}'&'${A_1029}'&'${A_1030}'`);
+    parts.push(`${A_1050}&${A_1029}&${A_1030}`);
     return parts.join('&');
   };
 
-  // Llamada al upstream
+  // === Llamada al upstream (dos intentos: mes actual y mes anterior) ===
   const callUpstream = async (payload) => {
     const resp = await axios.post(url, payload, {
       headers: {
@@ -1154,7 +1357,7 @@ app.post('/ivr/consultamovtdc', async (req, res) => {
     };
   };
 
-  // primer intento
+  // 1) intento con mes/anho recibidos
   let first;
   try {
     first = await callUpstream({ mes, anho, cuenta, tipoMovimiento });
@@ -1176,17 +1379,14 @@ app.post('/ivr/consultamovtdc', async (req, res) => {
     });
   }
 
-  // segundo intento: mes anterior (con rollover de año)
+  // 2) intento con mes anterior (con rollover de año)
   const m = parseInt(mes, 10);
   const y = parseInt(anho, 10);
   let prevMes = isNaN(m) ? 1 : m;
   let prevAnho = isNaN(y) ? new Date().getFullYear() : y;
 
   prevMes = prevMes - 1;
-  if (prevMes <= 0) {
-    prevMes = 12;
-    prevAnho = prevAnho - 1;
-  }
+  if (prevMes <= 0) { prevMes = 12; prevAnho = prevAnho - 1; }
   const prevMesStr = String(prevMes).padStart(2, '0');
   const prevAnhoStr = String(prevAnho);
 
@@ -1220,6 +1420,7 @@ app.post('/ivr/consultamovtdc', async (req, res) => {
     info: second.data
   });
 });
+
 
 app.listen(PORT, () => {
     console.log(`🟢 IVR env disponible en http://localhost:${PORT}/ivr/env`);
