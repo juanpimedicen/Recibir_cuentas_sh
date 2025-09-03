@@ -1,51 +1,56 @@
-#!/bin/sh
+#!/bin/bash
 
-# Verifica que se pasó un parámetro
-if [ $# -ne 1 ]; then
+# Verifica que se haya recibido un argumento
+if [ -z "$1" ]; then
   echo "Uso: $0 '<json>'"
   exit 1
 fi
 
-# JSON como string
-INPUT_JSON="$1"
-
-# Ruta base de audios
-AUDIO_BASE="/var/opt/motion2/server/files/sounds/converted/[1060]-1752614432318"
+# Rutas base
 DIGITS_PATH="/var/lib/asterisk/sounds/es/digits"
+INTRO_AUDIO="[1060]-1752614432318"
 
-# Mapeo de audios "marque X"
-declare -a MARQUE_PATHS
-MARQUE_PATHS[1]="/var/opt/motion2/server/files/sounds/converted/[260]-1752615204711"
-MARQUE_PATHS[2]="/var/opt/motion2/server/files/sounds/converted/[261]-1752615205563"
-MARQUE_PATHS[3]="/var/opt/motion2/server/files/sounds/converted/[262]-1752615206416"
-MARQUE_PATHS[4]="/var/opt/motion2/server/files/sounds/converted/[263]-1752615207245"
-MARQUE_PATHS[5]="/var/opt/motion2/server/files/sounds/converted/[264]-1752615208213"
-MARQUE_PATHS[6]="/var/opt/motion2/server/files/sounds/converted/[265]-1752615209184"
-MARQUE_PATHS[7]="/var/opt/motion2/server/files/sounds/converted/[266]-1752615210139"
-MARQUE_PATHS[8]="/var/opt/motion2/server/files/sounds/converted/[267]-1752615210967"
-MARQUE_PATHS[9]="/var/opt/motion2/server/files/sounds/converted/[268]-1752615211846"
+# Map de audios de "marque N"
+declare -A MARQUE_AUDIO
+MARQUE_AUDIO=(
+  [1]="[260]-1752615204711"
+  [2]="[261]-1752615205563"
+  [3]="[262]-1752615206416"
+  [4]="[263]-1752615207245"
+  [5]="[264]-1752615208213"
+  [6]="[265]-1752615209184"
+  [7]="[266]-1752615210139"
+  [8]="[267]-1752615210967"
+  [9]="[268]-1752615211846"
+)
 
-# Extraer cuentas y procesar
-echo "$INPUT_JSON" | jq -r '.data[0:9][] | .cuenta12' | awk -v audio_base="$AUDIO_BASE" -v digits_path="$DIGITS_PATH" '
-BEGIN {
-  FS = "\n"
-}
-{
-  count++
-  output = "\x27" audio_base "\x27"
-  len = length($0)
-  last4 = substr($0, len - 3, 4)
-  for (i = 1; i <= 4; i++) {
-    digit = substr(last4, i, 1)
-    output = output "&\x27" digits_path "/" digit "\x27"
-  }
-  marque = count + 259
-  output = output "&\x27/var/opt/motion2/server/files/sounds/converted/[" marque "]-175261520" sprintf("%04d", 4711 + (count - 1) * 843) "\x27"
-  if (count == 1)
-    final = output
+# Parseo de JSON
+JSON_INPUT="$1"
+CUENTAS=$(echo "$JSON_INPUT" | jq -r '.data[].cuenta12' | tail -n 9)
+
+# Construcción de salida
+OUTPUT=""
+INDEX=1
+
+while IFS= read -r cuenta; do
+  last4="${cuenta: -4}" # Últimos 4 dígitos
+  line="'$INTRO_AUDIO'"
+  
+  for ((i=0; i<${#last4}; i++)); do
+    digit="${last4:$i:1}"
+    line="$line&'$digit'"
+  done
+
+  line="$line&'${MARQUE_AUDIO[$INDEX]}'"
+  
+  if [ -n "$OUTPUT" ]; then
+    OUTPUT="$OUTPUT&$line"
   else
-    final = final "&" output
-}
-END {
-  print final
-}'
+    OUTPUT="$line"
+  fi
+
+  ((INDEX++))
+done <<< "$CUENTAS"
+
+# Resultado final
+echo "$OUTPUT"

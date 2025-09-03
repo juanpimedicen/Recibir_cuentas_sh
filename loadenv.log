@@ -1,0 +1,78 @@
+2025-08-01 15:01:51 [OK] Ambiente: desa - Resultado: {
+  "consultasaldo": {
+    "urlauth": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/v1/auth/login",
+    "basicauth": "d9069f26630e11f0a0860ebc29d32ae9",
+    "passwd": "password123",
+    "url": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/producto/v1/cuenta-banco/saldo"
+  },
+  "consultadeudatdc": {
+    "urlauth": "http://desa.example.com/auth",
+    "basicauth": "clave_desa",
+    "passwd": "passdesa",
+    "url": "http://desa.example.com/api/deuda"
+  },
+  "consultamovimientosTDC": {
+    "passwd": "password123",
+    "url": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/producto/v1/tarjeta-credito/consulta/movimientos",
+    "basicauth": "d9069f26630e11f0a0860ebc29d32ae9",
+    "urlauth": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/v1/auth/login"
+  },
+  "consultatdd": {
+    "passwd": "password123",
+    "url": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/producto/v1/tarjeta-debito/consulta",
+    "basicauth": "d9069f26630e11f0a0860ebc29d32ae9",
+    "urlauth": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/v1/auth/login"
+  }
+}
+2025-08-01 15:03:24 [OK] Ambiente: desa - Resultado: {
+  "consultasaldo": {
+    "urlauth": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/v1/auth/login",
+    "basicauth": "d9069f26630e11f0a0860ebc29d32ae9",
+    "passwd": "password123",
+    "url": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/producto/v1/cuenta-banco/saldo"
+  },
+  "consultadeudatdc": {
+    "urlauth": "http://desa.example.com/auth",
+    "basicauth": "clave_desa",
+    "passwd": "passdesa",
+    "url": "http://desa.example.com/api/deuda"
+  },
+  "consultamovimientosTDC": {
+    "passwd": "password123",
+    "url": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/producto/v1/tarjeta-credito/consulta/movimientos",
+    "basicauth": "d9069f26630e11f0a0860ebc29d32ae9",
+    "urlauth": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/v1/auth/login"
+  },
+  "consultatdd": {
+    "passwd": "password123",
+    "url": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/producto/v1/tarjeta-debito/consulta",
+    "basicauth": "d9069f26630e11f0a0860ebc29d32ae9",
+    "urlauth": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/v1/auth/login"
+  }
+}
+2025-08-01 15:03:44 [OK] Ambiente: desa - Resultado: {
+  "consultasaldo": {
+    "urlauth": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/v1/auth/login",
+    "basicauth": "d9069f26630e11f0a0860ebc29d32ae9",
+    "passwd": "password123",
+    "url": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/producto/v1/cuenta-banco/saldo"
+  },
+  "consultadeudatdc": {
+    "urlauth": "http://desa.example.com/auth",
+    "basicauth": "clave_desa",
+    "passwd": "passdesa",
+    "url": "http://desa.example.com/api/deuda"
+  },
+  "consultamovimientosTDC": {
+    "passwd": "password123",
+    "url": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/producto/v1/tarjeta-credito/consulta/movimientos",
+    "basicauth": "d9069f26630e11f0a0860ebc29d32ae9",
+    "urlauth": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/v1/auth/login"
+  },
+  "consultatdd": {
+    "passwd": "password123",
+    "url": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/producto/v1/tarjeta-debito/consulta",
+    "basicauth": "d9069f26630e11f0a0860ebc29d32ae9",
+    "urlauth": "http://linkagems-testing-dev-lb-1939586112.us-east-1.elb.amazonaws.com/api/v1/auth/login"
+  }
+}
